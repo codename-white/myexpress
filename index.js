@@ -1,4 +1,5 @@
 // index.js
+require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 
@@ -6,8 +7,8 @@ const app = express();
 
 // ตั้งค่าจาก LINE Developers Console
 const config = {
-  channelAccessToken: '4kG+nfJK6kPwI9yQDlBFa/7BrzYCWh1mmCFkFw9vePVaHeHIRPNIPsFPy+Ulpa9DCzA1nAzJsEDy93t1nmLz45f0OirJCYjEMyiLsWBE09G1T9bWjCkhQqyiKF+rZPpzU56lXo1RAKMoETJqPejdlgdB04t89/1O/w1cDnyilFU=',
-  channelSecret: '65835210ae84b3ee5f58ad520f91195a'
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || "",
+  channelSecret: process.env.LINE_CHANNEL_SECRET || ""
 };
 
 // สร้าง Client สำหรับ Messaging API (เวอร์ชันล่าสุด v9+)
@@ -51,7 +52,7 @@ async function handleEvent(event) {
   });
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3004;
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
