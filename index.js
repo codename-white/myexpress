@@ -29,6 +29,10 @@ app.post('/webhook', (req, res) => {
     });
 });
 
+app.get('/', (req, res) => {
+  res.send('hello world, suphanut');
+});
+
 // ฟังก์ชัน handleEvent สำหรับจัดการ Event ต่างๆ
 async function handleEvent(event) {
   // ตรวจสอบว่าเป็นข้อความ (Message) และเป็นข้อความตัวอักษร (Text) หรือไม่
