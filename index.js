@@ -79,12 +79,39 @@ async function handleImageMessage(event) {
       });
     }
 
+    // ให้ Gemini วิเคราะห์รูปภาพว่าเป็นสัตว์ชนิดอะไร
+    let aiAnswer = "";
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [
+          {
+            inlineData: {
+              data: buffer.toString("base64"),
+              mimeType: "image/jpeg"
+            }
+          },
+          "รูปภาพนี้คือสัตว์ชนิดอะไร ช่วยบอกสั้นๆ"
+        ]
+      });
+      aiAnswer = response.text;
+    } catch (err) {
+      console.error("Gemini Image Error:", err);
+      aiAnswer = "ขออภัยครับ ไม่สามารถวิเคราะห์รูปภาพได้ในขณะนี้ (อาจติดปัญหา Quota)";
+    }
+
     return client.replyMessage({
       replyToken: event.replyToken,
-      messages: [{
-        type: 'text',
-        text: 'ได้รับรูปภาพและบันทึกลง Supabase Storage เรียบร้อยแล้วครับ'
-      }]
+      messages: [
+        {
+          type: 'text',
+          text: 'ได้รับรูปภาพและบันทึกลง Supabase Storage เรียบร้อยแล้วครับ'
+        },
+        {
+          type: 'text',
+          text: aiAnswer
+        }
+      ]
     });
 
   } catch (error) {
