@@ -197,7 +197,7 @@ async function handleImage(event) {
 
 // เพิ่ม GET Method
 app.get('/', (req, res) => {
-  res.send('hello world, Natchaphat Meephian 66222420018');
+  res.send('Suphanut Chaowanamethakul');
 });
 
 // listen on port
