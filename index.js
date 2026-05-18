@@ -1,196 +1,112 @@
-// index.js
-require('dotenv').config();
-const express = require('express');
-const line = require('@line/bot-sdk');
-const { createClient } = require("@supabase/supabase-js");
-const { GoogleGenAI } = require('@google/genai');
+// --- 1. นำเข้าไลบรารีที่จำเป็น ---
+import * as line from '@line/bot-sdk';
+import express from 'express';
+import * as dotenv from 'dotenv';
+dotenv.config();
+import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI } from '@google/genai';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
+// --- 2. ตั้งค่าระบบ (Express, Supabase, Gemini, LINE) ---
 const app = express();
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
+  // process.env.SUPABASE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ตั้งค่าจาก LINE Developers Console
-const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || "",
-  channelSecret: process.env.LINE_CHANNEL_SECRET || ""
-};
-
-// สร้าง Client สำหรับ Messaging API (เวอร์ชันล่าสุด v9+)
-const client = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: config.channelAccessToken
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
 });
 
-// ใช้ Middleware ของ LINE เพื่อตรวจสอบ Signature
-app.use('/webhook', line.middleware(config));
+const config = {
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
 
-// รับ webhook จาก LINE
-app.post('/webhook', (req, res) => {
+const client = line.LineBotClient.fromChannelAccessToken({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+});
+
+// --- 3. สร้าง Webhook รอรับข้อความจาก LINE ---
+app.post('/callback', line.middleware(config), (req, res) => {
   Promise
     .all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
-      console.error('Error in webhook handler:', err);
+      console.error(err);
       res.status(500).end();
     });
 });
 
-app.get('/', (req, res) => {
-  res.send('hello world, suphanut');
-});
+// event handler
+// function handleEvent(event) {
+//   if (event.type !== 'message' || event.message.type !== 'text') {
+//     // ignore non-text-message event
+//     return Promise.resolve(null);
+//   }
 
+//   // create an echoing text message
+//   const echo = { type: 'text', text: event.message.text };
 
-async function handleImageMessage(event) {
-  const messageId = event.message.id;
+//   // use reply API
+//   return client.replyMessage({
+//     replyToken: event.replyToken,
+//     messages: [echo],
+//   });
+// }
 
-  try {
-    // ดึงไฟล์จาก LINE
-    const stream = await client.getMessageContent(messageId);
-
-    // แปลง stream → buffer
-    const chunks = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
-
-    // อัพโหลดเข้า Supabase Storage
-    const fileName = `line_images/${messageId}.jpg`;
-    const { data, error } = await supabase.storage
-      .from("uploads") // ชื่อ bucket
-      .upload(fileName, buffer, {
-        contentType: "image/jpeg",
-        upsert: true, // ถ้ามีไฟล์ชื่อซ้ำ จะเขียนทับ
-      });
-
-    if (error) {
-      console.error("❌ Upload error:", error);
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{
-          type: 'text',
-          text: 'เกิดข้อผิดพลาดในการอัปโหลดรูปภาพลง Storage'
-        }]
-      });
-    }
-
-    // ให้ Gemini วิเคราะห์รูปภาพว่าเป็นสัตว์ชนิดอะไร
-    let aiAnswer = "";
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [
-          {
-            inlineData: {
-              data: buffer.toString("base64"),
-              mimeType: "image/jpeg"
-            }
-          },
-          "รูปภาพนี้คือสัตว์ชนิดอะไร ช่วยบอกสั้นๆ"
-        ]
-      });
-      aiAnswer = response.text;
-    } catch (err) {
-      console.error("Gemini Image Error:", err);
-      aiAnswer = "ขออภัยครับ ไม่สามารถวิเคราะห์รูปภาพได้ในขณะนี้ (อาจติดปัญหา Quota)";
-    }
-
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [
-        {
-          type: 'text',
-          text: 'ได้รับรูปภาพและบันทึกลง Supabase Storage เรียบร้อยแล้วครับ'
-        },
-        {
-          type: 'text',
-          text: aiAnswer
-        }
-      ]
-    });
-
-  } catch (error) {
-    console.error("Image processing error:", error);
-  }
-}
-
-// 4. ฟังก์ชันหลักในการจัดการ Event และบันทึกข้อมูล
+// --- 4. ฟังก์ชันจัดการเมื่อมีคนส่งข้อความมา ---
 async function handleEvent(event) {
-  // รองรับเฉพาะ Event ประเภทข้อความ (Message Event) เท่านั้น
-  if (event.type !== 'message') {
-    return null;
+
+  if (event.type === "message" && event.message.type === "image") {
+    return handleImage(event);
   }
+
+  if (event.type !== 'message') return null;
 
   const userId = event.source.userId || 'unknown';
   const replyToken = event.replyToken || '';
- 
-  // ดึงข้อมูลพื้นฐานจาก Message Object ของ LINE
   const messageId = event.message.id;
-  const messageType = event.message.type; // text, image, sticker, video, etc.
+  const messageType = event.message.type;
 
-  // ถ้าเป็นรูปภาพ ให้ส่งไปทำงานที่ฟังก์ชัน handleImageMessage ทันที (อ้างอิงตามสไลด์)
-  if (messageType === 'image') {
-    return handleImageMessage(event);
-  }
- 
   let content = null;
   let botReplyText = '';
 
-  // ตรวจสอบเงื่อนไขตามประเภทข้อความ
-  if (messageType === 'text') {
+  if (event.message.type === 'text') {
     content = event.message.text;
-    
-    // เรียกใช้ Gemini สร้างคำตอบที่สร้างสรรค์และสั้น
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: content,
-        config: {
-          systemInstruction: "คุณคือบอทผู้ช่วยใน LINE ให้ตอบคำถามสั้นๆ กระชับ ได้ใจความ และมีความสร้างสรรค์",
-        }
-      });
-      botReplyText = response.text;
-    } catch (err) {
-      console.error('Gemini Error:', err);
-      botReplyText = "ขออภัยครับ ระบบ AI เกิดข้อขัดข้องชั่วคราว";
-    }
   } else {
-    // หากเป็นประเภทอื่น (ที่ไม่ใช่รูปและไม่ใช่ text) เช่น sticker, video
     content = `[Received ${messageType} message]`;
     botReplyText = `ได้รับข้อความประเภท ${messageType} แล้วครับ`;
   }
 
   try {
-    // บันทึกข้อมูลลงตาราง messages ใน Supabase (บันทึกคู่ทั้งคำถามและคำตอบที่เตรียมไว้)
-    const { error } = await supabase
-      .from('messages')
-      .insert([
-        {
-          user_id: userId,
-          message_id: messageId,
-          type: messageType,
-          content: content,
-          reply_token: replyToken,
-          reply_content: botReplyText
-        }
-      ]);
-
-    if (error) {
-      console.error('Supabase Insert Error:', error.message);
+    // 4.1 ให้ Gemini ช่วยคิดคำตอบ (ถ้าเป็นข้อความ)
+    if (event.message.type === 'text') {
+      const geminiResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: content,
+      });
+      botReplyText = geminiResponse.text || 'ขออภัยครับ ระบบไม่สามารถสร้างคำตอบได้';
     }
 
-    // ตอบกลับข้อความไปยังผู้ใช้ใน LINE
+    // 4.2 บันทึกประวัติการแชทลงฐานข้อมูล Supabase
+    const { error } = await supabase
+      .from('messages')
+      .insert([{
+        user_id: userId,
+        message_id: messageId,
+        type: messageType,
+        content: content,
+        reply_token: replyToken,
+        reply_content: botReplyText
+      }]);
+
+    if (error) console.error('Supabase Insert Error:', error.message);
+
+    // 4.3 ส่งข้อความกลับไปหาผู้ใช้ทาง LINE
     return await client.replyMessage({
       replyToken: replyToken,
-      messages: [
-        {
-          type: 'text',
-          text: botReplyText,
-        },
-      ],
+      messages: [{ type: 'text', text: botReplyText }],
     });
 
   } catch (error) {
@@ -198,7 +114,168 @@ async function handleEvent(event) {
   }
 }
 
-const PORT = process.env.PORT || 3004;
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+// --- 5. ฟังก์ชันจัดการเมื่อมีคนส่งรูปภาพมา ---
+async function handleImage(event) {
+  const messageId = event.message.id;
+  const userId = event.source.userId || 'unknown';
+  const replyToken = event.replyToken || '';
+  
+  try {
+    // 5.1 ดึงไฟล์ภาพจาก LINE
+    const stream = await client.getMessageContent(messageId);
+    
+    // 5.2 แปลง stream เป็น Buffer
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+    
+    // 5.3 อัปโหลดเข้า Supabase Storage
+    const fileName = `line_images/${messageId}.jpg`;
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from("uploads")
+      .upload(fileName, buffer, {
+        contentType: "image/jpeg",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("❌ Upload error:", uploadError);
+      return client.replyMessage({
+        replyToken: replyToken,
+        messages: [{ type: "text", text: "อัปโหลดรูปไป Supabase ไม่สำเร็จ" }],
+      });
+    }
+
+    console.log("✅ Uploaded to Supabase:", uploadData);
+
+    // 5.4 ให้ Gemini ช่วยจำแนกรูปภาพ
+    const base64Data = buffer.toString('base64');
+    const geminiResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: 'ช่วยจำแนกและอธิบายหน่อยว่ารูปนี้คือรูปอะไร (ตอบสั้นๆ ได้ใจความ)' },
+            { inlineData: { data: base64Data, mimeType: 'image/jpeg' } }
+          ]
+        }
+      ]
+    });
+
+    const botReplyText = geminiResponse.text || 'ไม่สามารถจำแนกรูปภาพนี้ได้';
+
+    // 5.5 บันทึกประวัติลงฐานข้อมูล Supabase
+    const { error: dbError } = await supabase
+      .from('messages')
+      .insert([{
+        user_id: userId,
+        message_id: messageId,
+        type: 'image',
+        content: fileName, // เก็บ path ของรูปใน Storage แทน
+        reply_token: replyToken,
+        reply_content: botReplyText
+      }]);
+
+    if (dbError) console.error('Supabase Insert Error:', dbError.message);
+
+    // 5.6 ตอบกลับผลการวิเคราะห์ให้ User
+    return await client.replyMessage({
+      replyToken: replyToken,
+      messages: [
+        { type: "text", text: "📷 ได้รับรูปแล้ว และอัปโหลดไป Supabase สำเร็จ!" },
+        { type: "text", text: botReplyText }
+      ],
+    });
+
+  } catch (err) {
+    console.error("❌ Error in handleImage:", err);
+  }
+}
+
+// เพิ่ม GET Method
+app.get('/', (req, res) => {
+  res.send('hello world, Natchaphat Meephian 66222420018');
 });
+
+// listen on port
+const port = process.env.PORT || 3004;
+app.listen(port, () => {
+  console.log(`listening on ${port}`);
+});
+
+//Old version of line bot sdk: https://www.npmjs.com/package/linebot
+// // index.js
+// const express = require('express');
+// const { middleware, messagingApi } = require('@line/bot-sdk');
+
+// const app = express();
+
+// // ตั้งค่าจาก LINE Developers Console
+// const config = {
+//   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || "",
+//   channelSecret: process.env.LINE_CHANNEL_SECRET || ""
+// };
+
+// app.use('/webhook', middleware(config));
+
+// // รับ webhook
+// app.post('/webhook', (req, res) => {
+//   Promise
+//     .all(req.body.events.map(handleEvent))
+//     .then(result => res.json(result));
+// });
+
+// // ตอบกลับข้อความ
+// function handleEvent(event) {
+//   if (event.type !== 'message' || event.message.type !== 'text') {
+//     return Promise.resolve(null);
+//   }
+
+//   return client.replyMessage({
+//     replyToken: event.replyToken,
+//     messages: [{
+//       type: 'text',
+//       text: `คุณพิมพ์ว่า: ${event.message.text}`
+//     }]
+//   });
+// }
+
+// const client = new messagingApi.MessagingApiClient({
+//   channelAccessToken: config.channelAccessToken
+// });
+
+// const PORT = process.env.PORT || 3000;
+// app.listen(PORT, () => {
+//   console.log(`Server running at http://localhost:${PORT}`);
+// });
+
+// example
+// const express = require('express');
+// const app = express();
+// const port = 3000
+
+// // Respond with Hello World! on the homepage:
+// app.get('/', function (req, res) {
+//     res.send('Hello World!')
+// })
+
+// // Respond to POST request on the root route (/), the application’s home page:
+// app.post('/', function (req, res) {
+//     res.send('Got a POST request')
+// })
+// // Respond to a PUT request to the /user route:
+// app.put('/user', function (req, res) {
+//     res.send('Got a PUT request at /user')
+// })
+// // Respond to a DELETE request to the /user route:
+// app.delete('/user', function (req, res) {
+//     res.send('Got a DELETE request at /user')
+// })
+
+
+// app.listen(port, () => {
+//     console.log(`Example app listening at http://localhost:${port}`)
+// })
