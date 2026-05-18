@@ -10,10 +10,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const app = express();
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  // process.env.SUPABASE_KEY
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
 );
-
 
 // ตั้งค่าจาก LINE Developers Console
 const config = {
